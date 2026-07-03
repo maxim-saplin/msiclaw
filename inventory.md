@@ -54,7 +54,8 @@
 |-----------------|---------------------------------------------------------------------------------------------------------------------------------|
 | Power key       | `/etc/systemd/logind.conf.d/zz-claw-power.conf` — `HandlePowerKey=ignore` (short press was causing suspend after hibernate resume). **`zz-` prefix is required**: drop-ins merge last-wins by filename, and `deck.conf` (`HandlePowerKey=suspend`) sorts after `claw-power.conf`, silently overriding it. `zz-` sorts after `deck.conf` so `ignore` wins. Verify live: `busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager HandlePowerKey`. |
 | Bazzite default | `deck.conf` — still has `KillUserProcesses=true` and `HandlePowerKey=suspend` (the latter is overridden by `zz-claw-power.conf`)  |
-| HHD DPMS        | `gamemode.gamescope.dpms: false` in `/etc/hhd/state.yml` ("Poweroff screen before sleep"). Default `true` re-fires a stale DPMS timer just after hibernate resume → logind suspends again ~28s post-wake (the black-screen-then-resleep loop). |
+| HHD DPMS        | `gamemode.gamescope.dpms: false` in `/etc/hhd/state.yml` ("Poweroff screen before sleep"). Default `true` re-fires a stale DPMS timer just after hibernate resume → panel powered off (**this IS the "black screen after resume"**) → logind suspends again ~28s post-wake (the black-screen-then-resleep loop). Fixed + confirmed 2026-07-03. |
+| gamescope xe noise | `drm: drmModeAddFB2WithModifiers failed: Invalid argument` + `drm: flip error: Device or resource busy` from `gamescope-session-plus` are **benign, continuous** on `xe`/Meteor Lake — fire during normal menus, plugin/HHD restarts, hibernate *entry*, and clean resumes alike. **Not** the black-screen cause (decorrelated: present on good resumes). Do not chase unless a black screen recurs with DPMS already off. |
 
 ---
 

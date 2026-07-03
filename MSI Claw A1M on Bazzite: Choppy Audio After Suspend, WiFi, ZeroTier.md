@@ -2,7 +2,7 @@ Post-sleep choppy/fast-forward audio on the MSI Claw A1M was mainly a **real-tim
 
 ---
 
-> Claw A1M Bazzite: audio glitch = `timedatectl set-local-rtc 0`; WiFi after sleep = BE200 `d3cold_allowed=0` + `claw-wifi-post-resume.sh` (ZT after WiFi, `rp_filter=0`, **no WiFi rfkill / nmcli in hook**); gamepad after sleep = USB `3-9` rebind only (**no autosuspend**, **no HHD restart in hook**); battery stuck = `claw-battery-charge-kick.sh` (HHD limit sync); ZeroTier = ensure-online service; Proton pad = HHD DInput off + restart game; sleep drain/fan in sleep ~2%/h = **same on Windows** (DRIPS 0%), shutdown for long idle; wake flash→re-sleep = try **disable Gamescope DPMS** in HHD. Skip `snd_hda_intel` and `mem_sleep_default=deep`.
+> Claw A1M Bazzite: audio glitch = `timedatectl set-local-rtc 0`; WiFi after sleep = BE200 `d3cold_allowed=0` + `claw-wifi-post-resume.sh` (ZT after WiFi, `rp_filter=0`, **no WiFi rfkill / nmcli in hook**); gamepad after sleep = USB `3-9` rebind only (**no autosuspend**, **no HHD restart in hook**); battery stuck = `claw-battery-charge-kick.sh` (HHD limit sync); ZeroTier = ensure-online service; Proton pad = HHD DInput off + restart game; sleep drain/fan in sleep ~2%/h = **same on Windows** (DRIPS 0%), shutdown for long idle; wake black-screen/flash→re-sleep = **Gamescope DPMS off** (`gamemode.gamescope.dpms: false`) — this *is* the black screen, gamescope `drmModeAddFB2WithModifiers`/`flip error` spam is a red herring (§7c). Skip `snd_hda_intel` and `mem_sleep_default=deep`.
 
 ## TL;DR
 
@@ -18,7 +18,7 @@ Post-sleep choppy/fast-forward audio on the MSI Claw A1M was mainly a **real-tim
 | ZeroTier OFFLINE after boot                                   | `zerotier-ensure-online.service`                                                       | **Fixed**                        |
 | Sleep hook on power-button suspend                            | `systemd-suspend.service.d` drop-in                                                    | **Fixed**                        |
 | Fan spinning during sleep                                     | Shallow `s2idle`, no S0ix — **Windows same**                                           | **Not fixed**                    |
-| Wake → brief screen → sleep again                             | HHD **Gamescope DPMS** timeout on wake; disable in HHD to test                         | **Workaround**                   |
+| Wake → black screen / brief flash → sleep again               | HHD **Gamescope DPMS** panel-off on wake (`gamemode.gamescope.dpms: false`); §7c        | **Fixed**                        |
 | Sleep battery drain (~2%/h)                                   | Firmware floor (S0ix never engages) — **measured 1.20 W / 2.05%/h on battery**          | **Unfixable in-OS** → suspend-then-hibernate |
 
 ---
@@ -208,11 +208,15 @@ S0ix never engages on Linux. **Windows 11 Modern Standby (Connected)** on same h
 
 **Observed:** Fan can run while device appears asleep (including long `s2idle` sessions). Logs show real `PM: suspend entry` / `suspend exit` — not a failed suspend, but **shallow sleep** with SoC still warm. Fan may also run during the **pre-suspend freeze** phase (seconds before hardware sleeps). **No software fan-off** — MSI EC/firmware; `fw-fanctrl-suspend` is a Framework script and fails here (ignore).
 
-### 7c. Wake → screen flash → sleeps again
+### 7c. Wake → black screen / flash → sleeps again  ✅ FIXED
 
-**Observed:** HHD enables **Gamescope DPMS** on sleep entry; on wake, **`DPMS timeout lapsed`** (~30 min timer, can coincide with wake) → logind **`The system will suspend now!`** again.
+**Observed:** HHD enables **Gamescope DPMS** on sleep entry; on wake, **`DPMS timeout lapsed`** (~30 min timer, can coincide with wake) → logind **`The system will suspend now!`** again. The panel-off from DPMS **is** the "black screen after hibernate resume" — not a compositor/DRM failure.
 
-**Workaround:** In HHD, try disabling **Gamescope DPMS** (`gamemode.gamescope.dpms` / "Poweroff screen before sleep"). Unrelated to fan, but explains double-suspend feel on resume.
+**Fix applied (2026-07-03):** Set `gamemode.gamescope.dpms: false` in `/etc/hhd/state.yml` (HHD → "Poweroff screen before sleep" = off), restart `hhd.service`. Confirmed on a hibernate resume: panel stayed on, no re-sleep.
+
+**Red herring — do NOT chase:** gamescope logs `drm: drmModeAddFB2WithModifiers failed: Invalid argument` and `drm: flip error: Device or resource busy` on `xe`/Meteor Lake. These are **continuous background noise** — they fire during normal menu use, plugin restarts, and hibernate *entry*, and they appear on **clean resumes with no black screen**. They are decorrelated from the black screen; an earlier incident report wrongly fingerprinted them as the cause. Ignore unless a black screen recurs *with DPMS already disabled*.
+
+Also required so a stray power tap during this window can't re-suspend: power key must be `ignore` and win the logind drop-in merge — see §Power/input (`zz-claw-power.conf`).
 
 **Never do:** `mem_sleep_default=deep`, `modprobe -r intel_vpu`, PCI audio unbind hook, ROG Ally fingerprint rule, **USB autosuspend on gamepad `3-9`**.
 
