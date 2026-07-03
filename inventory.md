@@ -52,8 +52,9 @@
 
 | Item            | Location / detail                                                                                                               |
 |-----------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Power key       | `/etc/systemd/logind.conf.d/claw-power.conf` — `HandlePowerKey=ignore` (short press was causing suspend after hibernate resume) |
-| Bazzite default | `deck.conf` — still has `KillUserProcesses=true`                                                                                |
+| Power key       | `/etc/systemd/logind.conf.d/zz-claw-power.conf` — `HandlePowerKey=ignore` (short press was causing suspend after hibernate resume). **`zz-` prefix is required**: drop-ins merge last-wins by filename, and `deck.conf` (`HandlePowerKey=suspend`) sorts after `claw-power.conf`, silently overriding it. `zz-` sorts after `deck.conf` so `ignore` wins. Verify live: `busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager HandlePowerKey`. |
+| Bazzite default | `deck.conf` — still has `KillUserProcesses=true` and `HandlePowerKey=suspend` (the latter is overridden by `zz-claw-power.conf`)  |
+| HHD DPMS        | `gamemode.gamescope.dpms: false` in `/etc/hhd/state.yml` ("Poweroff screen before sleep"). Default `true` re-fires a stale DPMS timer just after hibernate resume → logind suspends again ~28s post-wake (the black-screen-then-resleep loop). |
 
 ---
 
