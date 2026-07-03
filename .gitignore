@@ -1,0 +1,6 @@
+hiberdecky/
+uninstalldecky/
+.cursor/
+.DS_Store
+__pycache__/
+*.pyc
