@@ -87,9 +87,11 @@ NM backend is **IWD** (`/etc/NetworkManager/conf.d/iwd.conf`).
 net.ipv4.conf.wlan0.rp_filter = 0
 ```
 
-`/usr/local/bin/claw-wifi-post-resume.sh` — after wake: wait for wlan0 connected → flush DNS caches → `nmcli networking connectivity wait` → verify real HTTP (fedora hotspot + 1.1.1.1) → `nmcli device reapply wlan0` if still broken (up to 3 tries) → **then** start ZeroTier.
+`/usr/local/bin/claw-wifi-post-resume.sh` — after wake: wait for wlan0 connected → flush DNS caches → verify real HTTP (fedora hotspot + 1.1.1.1) → **`busctl CheckConnectivity` + poll until global and wlan0 both `full`** → `nmcli device reapply wlan0` only when already full (icon nudge) or on failed HTTP (up to 3 tries) → **then** start ZeroTier → **second connectivity finalize** after ZT (ZT `rp_filter=0` via udev).
 
-`/etc/NetworkManager/dispatcher.d/99-claw-wifi-post-resume` — same script on wlan0 `up` (manual radio toggle).
+`/etc/NetworkManager/dispatcher.d/99-claw-wifi-post-resume` — wlan0 `up` / `dhcp4-change` (full script); `connectivity-change` when not `full` → `--refresh-only`.
+
+`sudo ~/src/msiclaw/scripts/install-claw-wifi-hooks.sh` — install/update from repo.
 
 SELinux: `/var/lib/iwd/` relabeled `NetworkManager_var_lib_t` — gamescope WiFi toggle was hitting AVC denials on `wfn.psk`.
 

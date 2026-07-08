@@ -1,0 +1,1 @@
+To connect to device use `ssh user@msi-claw-b.local`

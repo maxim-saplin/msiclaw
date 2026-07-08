@@ -1,0 +1,37 @@
+#!/bin/bash
+# NetworkManager dispatcher — kick WiFi post-resume recovery on wlan0 events.
+IFACE="${1:-}"
+ACTION="${2:-}"
+[ "$IFACE" = "wlan0" ] || exit 0
+
+SCRIPT=/usr/local/bin/claw-wifi-post-resume.sh
+[ -x "$SCRIPT" ] || exit 0
+
+case "$ACTION" in
+  up|dhcp4-change)
+    ;;
+  connectivity-change)
+    # NM passes CONNECTIVITY_STATE for this action. Re-check when not full.
+    [ "${CONNECTIVITY_STATE:-}" = "full" ] && exit 0
+    nohup "$SCRIPT" --refresh-only >/dev/null 2>&1 &
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+# After sysfs hibernate, run full recovery once on first wlan up.
+if [ -f /run/claw-hibernate-resume.pending ]; then
+  nohup "$SCRIPT" >/dev/null 2>&1 &
+  exit 0
+fi
+
+STAMP=/run/claw-wifi-post-resume.stamp
+now=$(date +%s)
+if [ -f "$STAMP" ]; then
+  last=$(cat "$STAMP" 2>/dev/null || echo 0)
+  [ $((now - last)) -lt 15 ] && exit 0
+fi
+echo "$now" >"$STAMP"
+nohup "$SCRIPT" >/dev/null 2>&1 &

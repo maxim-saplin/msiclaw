@@ -1,0 +1,4 @@
+# ZeroTier tun devices inherit rp_filter=2 (strict), which can skew NM per-device
+# connectivity checks and leave the WiFi icon stuck on "limited" after resume.
+ACTION=="add|change", SUBSYSTEM=="net", KERNEL=="zt*", \
+  RUN+="/usr/sbin/sysctl --ignore -q -w net.ipv4.conf.%k.rp_filter=0"
