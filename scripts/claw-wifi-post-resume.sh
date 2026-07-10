@@ -138,15 +138,21 @@ recover_wlan() {
 }
 
 start_zt_if_needed() {
-  [ -f "$ZT_FLAG" ] || return 0
-  rm -f "$ZT_FLAG"
-  if systemctl is-enabled --quiet zerotier-one.service 2>/dev/null; then
-    log "starting zerotier-one after WiFi verified"
-    systemctl start zerotier-one.service 2>/dev/null || true
-    sleep 2
+  local want_zt=0
+  [ -f "$ZT_FLAG" ] && { rm -f "$ZT_FLAG"; want_zt=1; }
+  systemctl is-enabled --quiet zerotier-one.service 2>/dev/null && want_zt=1
+  [ "$want_zt" -eq 1 ] || return 0
+
+  if systemctl is-active --quiet zerotier-one.service 2>/dev/null; then
     fix_zt_rp_filter
-    finalize_connectivity
+    return 0
   fi
+
+  log "starting zerotier-one after WiFi verified"
+  systemctl start zerotier-one.service 2>/dev/null || true
+  sleep 2
+  fix_zt_rp_filter
+  finalize_connectivity
 }
 
 run_hibernate_post_hooks() {
