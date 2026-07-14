@@ -18,7 +18,10 @@ Post-sleep choppy/fast-forward audio on the MSI Claw A1M was mainly a **real-tim
 | ZeroTier OFFLINE after boot                                   | `zerotier-ensure-online.service`                                                       | **Fixed**                        |
 | Sleep hook on power-button suspend                            | `systemd-suspend.service.d` drop-in                                                    | **Fixed**                        |
 | Fan spinning during sleep                                     | Shallow `s2idle`, no S0ix — **Windows same**                                           | **Not fixed**                    |
-| Wake → black screen / brief flash → sleep again               | HHD **Gamescope DPMS** panel-off on wake (`gamemode.gamescope.dpms: false`); §7c        | **Fixed**                        |
+| Wake → black screen / brief flash → sleep again               | HHD **Gamescope DPMS** panel-off on wake (`gamemode.gamescope.dpms: false`); §7c        | **Fixed** (this specific mechanism) |
+| Long-hibernate resume → black screen (stuck DRM plane, CRTC/panel otherwise healthy) | Gamescope hardware-plane assignment stuck (`drmModeAddFB2WithModifiers` EINVAL), 2 of 5 planes never scanned out; workaround `--disable-layers`; §7c-update (2026-07-14) | **Fixed** (this specific mechanism) |
+| WiFi stuck retrying (`supplicant-disconnect` loop) after hibernate resume | `claw-wifi-post-resume.sh` was silently gated behind a wlan0 `up` NM dispatcher event that never fires if wlan0 can't reconnect on its own; now triggered directly from `claw-hibernate.sh`, and `wait_wlan` actively kicks a stuck connection; §WiFi-update (2026-07-14) | **Working so far** (not battle-tested) |
+| Long-hibernate resume → black screen (Steam's own CEF renderer, not DRM/gamescope; occasionally hits a running game too) | Root cause: race between Xe driver's post-hibernate cold GPU reinit and a client's buffer-modifier commit; no retry/recreate logic on either side. No OS/config fix found; only known mitigation is manually restarting Steam or the session; §7d (2026-07-14) | **Root-caused, NOT fixed** |
 | Sleep battery drain (~2%/h)                                   | Firmware floor (S0ix never engages) — **measured 1.20 W / 2.05%/h on battery**          | **Unfixable in-OS** → suspend-then-hibernate |
 
 ---
@@ -106,6 +109,18 @@ Brief exclamation (~1s) during `CONNECTED_SITE` → `CONNECTED_GLOBAL` can still
 ```bash
 sudo /usr/local/bin/claw-wifi-post-resume.sh
 ```
+
+### WiFi-update (2026-07-14): stuck-reconnect after hibernate, and a bigger gating gap
+
+Observed: after a hibernate resume, wlan0 repeatedly failed to associate (`state change: config -> failed (reason 'supplicant-disconnect')`, ~4s apart) for **over a minute** before finally connecting (helped along by manually toggling WiFi off/on in the UI, though even that didn't fix it on the very next attempt — looks like the BE200 genuinely needs more time to settle post-hibernate before it'll associate).
+
+**Bigger problem found while digging into this:** `run_hibernate_post_hooks()` in `claw-wifi-post-resume.sh` (bluetooth unblock, fingerprint/gamepad USB rebind, wifi `d3cold` restore — i.e. most of the sleep hook's `post` case) was **only ever invoked when the NM dispatcher noticed wlan0 reach `up`**. If wlan0 gets stuck failing to associate, as above, that dispatcher event never fires — so bluetooth stayed blocked, the fingerprint reader stayed unbound, etc., for as long as WiFi stayed stuck, with nothing to intervene. This is a single point of failure in the whole post-resume hardware-restore chain, not just a WiFi issue.
+
+**Fix:**
+- `claw-hibernate.sh` now calls `claw-wifi-post-resume.sh` directly in its post-resume section, instead of relying on the WiFi dispatcher as the sole trigger. Hardware restore now runs promptly regardless of whether WiFi ever reconnects on its own.
+- `wait_wlan()` in `claw-wifi-post-resume.sh` now actively intervenes instead of passively polling: forces `nmcli device disconnect wlan0` + `connect wlan0` if not connected after 15s, then cycles the radio via `rfkill block/unblock wifi` if still stuck after 40s (automating the manual toggle that helped above), within the existing 90s budget.
+
+**Status (2026-07-14): working so far**, tested against the corrected, de-duplicated script (see the `claw-hibernate.sh` duplication note in `hiberdecky/docs/hibernate-resume.md` — the first "still broken" result was against the wrong file and doesn't count). `/usr/local/bin/claw-hibernate.sh` is now a symlink to the Decky-bundled copy, so there's only one file to keep in sync going forward.
 
 ---
 
@@ -216,11 +231,49 @@ S0ix never engages on Linux. **Windows 11 Modern Standby (Connected)** on same h
 
 **Fix applied (2026-07-03):** Set `gamemode.gamescope.dpms: false` in `/etc/hhd/state.yml` (HHD → "Poweroff screen before sleep" = off), restart `hhd.service`. Confirmed on a hibernate resume: panel stayed on, no re-sleep.
 
-**Red herring — do NOT chase:** gamescope logs `drm: drmModeAddFB2WithModifiers failed: Invalid argument` and `drm: flip error: Device or resource busy` on `xe`/Meteor Lake. These are **continuous background noise** — they fire during normal menu use, plugin restarts, and hibernate *entry*, and they appear on **clean resumes with no black screen**. They are decorrelated from the black screen; an earlier incident report wrongly fingerprinted them as the cause. Ignore unless a black screen recurs *with DPMS already disabled*.
+**Red herring — do NOT chase (usually):** gamescope logs `drm: drmModeAddFB2WithModifiers failed: Invalid argument` and `drm: flip error: Device or resource busy` on `xe`/Meteor Lake. These are **continuous background noise** — they fire during normal menu use, plugin restarts, and hibernate *entry*, and they appear on **clean resumes with no black screen**. They are decorrelated from the black screen; an earlier incident report wrongly fingerprinted them as the cause. Ignore unless a black screen recurs *with DPMS already disabled* — see the 2026-07-14 follow-up below, which is exactly that exception case.
 
 Also required so a stray power tap during this window can't re-suspend: power key must be `ignore` and win the logind drop-in merge — see §Power/input (`zz-claw-power.conf`).
 
 **Never do:** `mem_sleep_default=deep`, `modprobe -r intel_vpu`, PCI audio unbind hook, ROG Ally fingerprint rule, **USB autosuspend on gamepad `3-9`**.
+
+### 7c-update (2026-07-14): recurrence *with DPMS already off*
+
+A separate black-screen mode recurred on long hibernations (worse the longer the hibernation; short ones mostly fine) — screen black, but HHD's side-menu overlay and MangoHud's perf overlay kept working. This is the exact "ignore unless it recurs with DPMS already disabled" exception the red-herring note above calls out, so it was investigated rather than dismissed.
+
+**Live evidence (not just log noise this time):** caught it live via `sudo cat /sys/kernel/debug/dri/0/state` while the screen was actually black. `crtc[88] pipe A` was `enable=1 active=1` (i.e. **not** DPMS-blanked — a real DPMS-off would show `active=0`), eDP-1 `connected`, backlight `bl_power=0` (on) at real brightness. Of gamescope's 5 compositing planes, 3 had valid attached framebuffers (correct 1920x1080, Intel Tile4 modifier `0x100000000000009`) and **2 were stuck `crtc=(null) fb=0`** — exactly the planes that never got a `drmModeAddFB2WithModifiers` call to succeed. So this time the AddFB2 errors aren't noise decorrelated from the symptom — they coincide with specific planes that never got scanned out, on a resume that is a genuine cold POST + fresh Xe/KMS driver reinit (unlike s2idle, which keeps the same live kernel).
+
+**Workaround applied:** `--disable-layers` (disables libliftoff hardware-plane assignment, forces full GPU compositing to one buffer instead of juggling multiple planes+modifiers). Deployed without touching read-only `/usr`: a `GAMESCOPE_BIN` shim at `/usr/local/bin/claw-gamescope-diag-shim` (execs `gamescope --disable-layers "$@"`) activated via `/etc/gamescope-session-plus/sessions.d/steam` (`export GAMESCOPE_BIN=...`) — both are supported extension points `gamescope-session-plus` already reads, so no vendor files were modified.
+
+**Status (2026-07-14): working so far.** Confirmed the flag is actually being passed (checked `/proc/<pid>/cmdline`), and user-confirmed no recurrence across the subsequent test cycles. Treat as **provisionally fixed, not battle-tested** — it's held up over one testing session, not weeks of normal use. If a black screen ever recurs with `--disable-layers` still active in the running gamescope's cmdline, this workaround is wrong and the plane-modifier theory needs revisiting.
+
+The temporary diagnostic capture (`claw-resume-diag.sh`) that caught the original live evidence has been removed now that this is holding — script deleted, both call sites (`claw-hibernate.sh`, `50-msi-claw-s2idle-power.sh`) reverted, log file deleted. See `hiberdecky/docs/hibernate-resume.md` for the record of what it was.
+
+### 7d (2026-07-14): a second, distinct black-screen mechanism — Steam's own renderer, not DRM/gamescope
+
+Despite `--disable-layers` confirmed still active (checked the running gamescope's `/proc/<pid>/cmdline`), a later long hibernation still produced a black main screen with HHD's overlay and MangoHud still working — same visible symptom as §7c-update, but this time a different, newly-confirmed root cause. Don't conflate the two: §7c-update's stuck-plane mechanism is fixed and stayed fixed; this is a separate bug the same workaround doesn't touch.
+
+**Ruled out gamescope/DRM this time:** `/sys/kernel/debug/dri/0/state` showed `crtc[88] active=1`, backlight on at real brightness, and gamescope's own planes (1A/4A/5A) all had valid attached framebuffers with the correct Tile4 modifier — no stuck `crtc=(null)` planes like §7c-update. `gamescopectl debug_force_repaint` changed nothing (gamescope faithfully recomposited what it already had — so gamescope itself isn't the broken party).
+
+**Confirmed via X11-level capture:** `magick import -window <Steam Big Picture Mode window id>`, bypassing gamescope's compositor entirely, captured the *actual* Steam window content as solid black. The bug is inside Steam's own CEF renderer (`steamwebhelper`), upstream of gamescope, not a scanout/plane problem.
+
+**Mechanism (best-supported theory from the evidence gathered; not traced in kernel/Steam source):** hibernate is a genuine power-off (S4) — unlike `s2idle`, the Xe GPU driver has to cold re-initialize on resume (firmware reload, buffer-tiling-modifier re-validation). Every frozen process/thread wakes simultaneously (`Restarting tasks: Starting`/`Done` land in the same timestamp), so there's a brief, unsynchronized race between "is the Xe driver done re-validating tiled buffer modifiers yet" and "is some client (Steam's UI render surface, or a game) trying to submit its next frame right now." Nothing in this stack makes clients wait for driver-ready before committing; whichever loses the race gets `drmModeAddFB2WithModifiers failed: Invalid argument`, and — critically — neither Steam nor games have retry/recreate logic for that rejection, so the affected surface just stays stale/black indefinitely.
+
+This explains every observed pattern:
+- **Why menus/overlays are unaffected:** QAM, notification toasts, and MangoHud are idle until invoked — they don't attempt a GPU commit during the narrow vulnerable window, so by the time they're opened (driver long since settled) they build a fresh context with no problem.
+- **Why it's sometimes fine, sometimes not:** pure scheduling-timing luck under a post-resume thundering herd (USB re-enum, Bluetooth, WiFi reassociation, battery logic, HHD wake handling, Steam's own background update check — all competing for CPU at the same instant).
+- **Why longer hibernations are worse:** a longer power-off plausibly means a colder GPU/firmware reinit, widening the vulnerable window.
+- **Why it can occasionally hit a running game too** (per the original report — "no matter if game is playing or Steam home on screen"): a game's own render surface is just another GPU client that can lose the same race.
+
+**Status: root-caused, NOT fixed.** No config or kernel change has been applied.
+
+- **Kernel update checked:** current is `6.17.7-ba29.fc43` on `bazzite-deck:stable` (image dated 2026-04-20); `rpm-ostree upgrade --check` reported no update available as of 2026-07-14. Web search found the same `drmModeAddFB2WithModifiers` error on other Intel-iGPU + gamescope setups, but no confirmed upstream fix to point to — not worth chasing blindly on an immutable/ostree system without one.
+- **Config hardening candidates identified, neither applied (pending a decision):**
+  - `gamescopectl backend_set_dirty` in the post-resume hook — forces gamescope to proactively re-poll its DRM backend state. Cheap, low-risk, but only hardens gamescope's own plane/backend layer; does **not** address Steam's own render-context loss confirmed above, since that lives upstream of gamescope.
+  - `wayland_use_modifiers` convar set to `0` — would remove tiled-buffer-modifier negotiation entirely, i.e. remove the specific thing that's racing. Closer to a structural fix, but costs real GPU memory-bandwidth/power efficiency device-wide, all the time, not just around hibernate. Untested.
+- **The only known mitigation remains manual:** restart Steam, or restart the whole session (`systemctl --user restart gamescope-session-plus@steam.service`) if Steam itself won't recover — same as before this investigation.
+
+**Do NOT send mutating commands (e.g. `Page.reload`) to Steam's own internal webviews via its CDP remote-debugging port** (`steamwebhelper --remote-debugging-port=8080`, reachable at `localhost:8080/json`). Read-only inspection (listing targets, `Page.getFrameTree`) is fine and was useful here. A `Page.reload` sent to the "Steam Big Picture Mode" target during this investigation did not fix the black screen and instead corrupted Steam's internal state — a matching internal assertion failure (`clienthandler.cpp: Assertion Failed: Local file request not allowed for about:blank?...browserType=4...`) appeared in the logs shortly after, and the session went from "black main screen, menus working" to fully unresponsive (menus gone too), requiring a full `gamescope-session-plus@steam.service` restart to recover. The device/OS itself was never at risk throughout (SSH stayed responsive, no kernel errors, no crashed processes) — this was a session-level, not system-level, casualty. Steam's internal browser views are managed directly by its own C++ code and aren't meant to be driven externally like a normal browser tab.
 
 ---
 

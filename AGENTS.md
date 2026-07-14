@@ -1,1 +1,9 @@
 To connect to device use `ssh user@msi-claw-b.local`
+
+`claw-hibernate.sh` exists in two places on-device: the Decky-bundled copy (`~/homebrew/plugins/hiberdecky/scripts/claw-hibernate.sh`) and `/usr/local/bin/claw-hibernate.sh`. Decky's `main.py` always prefers the bundled one when it exists (near-always true) — patching only `/usr/local/bin/` silently never runs. They should be symlinked (see `hiberdecky/scripts/install.sh`); if they aren't, fix that instead of copying. Before telling the user a script change is "deployed" and ready to test, confirm which file the actual trigger (Decky button / systemd unit / cron) executes — e.g. `readlink -f` or `diff` the two — don't assume.
+
+Never trigger `sleep`/`hibernate` on this device remotely without the user's explicit go-ahead first. RTC auto-wake is not confirmed to bring it back from the custom hibernate path, so a remote trigger can leave the device fully off until someone physically presses the power button.
+
+There is also a plain `git clone` of this repo on the device at `/var/home/user/src/msiclaw/` — it is not executed by anything, just a workspace copy. Don't confuse it with the two real copies above; deploy to `/usr/local/bin/` and/or the Decky plugin dir, not there.
+
+Steam's CDP remote-debugging port (`steamwebhelper --remote-debugging-port=8080`, reachable at `localhost:8080/json`) is fine for read-only diagnostics (listing targets, `Page.getFrameTree`) when you need to inspect rendering state without physical access to the screen. Do not send mutating commands (e.g. `Page.reload`) to Steam's own internal webviews (Big Picture Mode, QuickAccess, etc.) — confirmed on 2026-07-14 to corrupt Steam's internal state (an internal assertion failure followed) and require a full `systemctl --user restart gamescope-session-plus@steam.service` to recover. Those views are managed directly by Steam's own C++ code, not meant to be driven externally like a normal browser tab.

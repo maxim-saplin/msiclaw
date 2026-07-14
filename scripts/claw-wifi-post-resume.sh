@@ -112,10 +112,29 @@ wait_nm() {
 }
 
 wait_wlan() {
-  local i state
+  local i state kicked=0 rfkilled=0
   for i in $(seq 1 "$MAX_WAIT"); do
     state=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | awk -F: '$1=="wlan0"{print $2; exit}')
     [ "$state" = "connected" ] && return 0
+    # Seen post-resume: wlan0 stuck retrying association on its own
+    # (repeated supplicant-disconnect) for over a minute with nothing to show
+    # for it. Give NM's own retry a head start, then force it.
+    if [ "$kicked" -eq 0 ] && [ "$i" -ge 15 ]; then
+      log "wlan0 stuck (state=${state:-unknown}) after ${i}s, forcing disconnect/reconnect"
+      nmcli device disconnect wlan0 >/dev/null 2>&1 || true
+      sleep 1
+      nmcli device connect wlan0 >/dev/null 2>&1 || true
+      kicked=1
+    fi
+    # Still stuck well past that — cycle the radio itself (this is what
+    # manually toggling WiFi off/on in the UI does).
+    if [ "$rfkilled" -eq 0 ] && [ "$i" -ge 40 ]; then
+      log "wlan0 still stuck (state=${state:-unknown}) after ${i}s, cycling wifi radio"
+      rfkill block wifi >/dev/null 2>&1 || true
+      sleep 1
+      rfkill unblock wifi >/dev/null 2>&1 || true
+      rfkilled=1
+    fi
     sleep 1
   done
   return 1
