@@ -2,12 +2,36 @@
 STATE=/run/msi-claw-s2idle.state
 GOODIX_USB=3-4
 MSI_USB=3-9
+MSI_JOYSTICK=/dev/input/by-path/pci-0000:00:14.0-usb-0:9:1.0-joystick
 WIFI_PCI=$(lspci -Dn 2>/dev/null | awk '/0280:8086:272b/{print $1}')
 KICK=/usr/local/bin/claw-battery-charge-kick.sh
 WIFI_FIX=/usr/local/bin/claw-wifi-post-resume.sh
 ZT_FLAG=/run/claw-start-zt-after-wifi
 
 log() { logger -t msi-claw-s2idle "$*"; }
+
+msi_gamepad_raw_ready() {
+  [ -e "/sys/bus/usb/devices/${MSI_USB}" ] || return 1
+  [ -e "/sys/bus/usb/devices/${MSI_USB}:1.0/driver" ] || return 1
+  [ "$(basename "$(readlink -f "/sys/bus/usb/devices/${MSI_USB}:1.0/driver")")" = "usbhid" ] || return 1
+  [ -e "$MSI_JOYSTICK" ] || return 1
+}
+
+msi_gamepad_irq_storm() {
+  journalctl -b -k --since "10 seconds ago" --no-pager 2>/dev/null \
+    | grep -q "usb ${MSI_USB}: input irq status -75 received"
+}
+
+msi_gamepad_needs_rebind() {
+  ! msi_gamepad_raw_ready || msi_gamepad_irq_storm
+}
+
+msi_gamepad_rebind() {
+  log "post: rebinding MSI gamepad USB"
+  echo "$MSI_USB" >/sys/bus/usb/drivers/usb/unbind 2>/dev/null || true
+  sleep 1
+  echo "$MSI_USB" >/sys/bus/usb/drivers/usb/bind 2>/dev/null || true
+}
 
 rfkill_state() {
   id="$1"
@@ -63,12 +87,10 @@ case "$1" in
         echo "$GOODIX_USB" >/sys/bus/usb/drivers/usb/bind 2>/dev/null || true
         sleep 1
       fi
-      if [ -e "/sys/bus/usb/devices/${MSI_USB}" ]; then
-        log "post: rebinding MSI gamepad USB"
-        echo "$MSI_USB" >/sys/bus/usb/drivers/usb/unbind 2>/dev/null || true
-        sleep 1
-        echo "$MSI_USB" >/sys/bus/usb/drivers/usb/bind 2>/dev/null || true
-        sleep 1
+      if msi_gamepad_needs_rebind; then
+        msi_gamepad_rebind
+      else
+        log "post: MSI gamepad healthy; skipping rebind"
       fi
       if [ -n "${wifi_d3cold:-}" ]; then
         echo "$wifi_d3cold" >"/sys/bus/pci/devices/${WIFI_PCI}/d3cold_allowed" 2>/dev/null || true

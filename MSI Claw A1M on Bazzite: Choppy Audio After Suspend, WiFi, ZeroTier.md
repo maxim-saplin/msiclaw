@@ -193,7 +193,7 @@ ExecStartPre=-/etc/systemd/system-sleep/50-msi-claw-s2idle-power.sh pre suspend
 ExecStartPost=-/etc/systemd/system-sleep/50-msi-claw-s2idle-power.sh post suspend
 ```
 
-**Hook does:** rfkill **BT only** (not WiFi), BE200 d3cold, stop fprintd/zerotier, unbind Goodix USB `3-4`, **keep gamepad USB `3-9` power=on** (no autosuspend); post-wake: rebind Goodix, **rebind gamepad `3-9` only** (no HHD restart), battery charge kick (background `--retry`), launch **`claw-wifi-post-resume.sh`** (ZT starts from that script after WiFi verified). **NM handles WiFi reconnect** — no nmcli in hook.
+**Hook does:** rfkill **BT only** (not WiFi), BE200 d3cold, stop fprintd/zerotier, unbind Goodix USB `3-4`, **keep gamepad USB `3-9` power=on** (no autosuspend); post-wake: rebind Goodix, **conditionally rebind gamepad `3-9` only if raw HID is missing or the known `usb 3-9: input irq status -75` storm is present** (no HHD restart), battery charge kick (background `--retry`), launch **`claw-wifi-post-resume.sh`** (ZT starts from that script after WiFi verified). **NM handles WiFi reconnect** — no nmcli in hook.
 
 **Hook does NOT:** fix S0ix / sleep drain / fan-off in sleep.
 
