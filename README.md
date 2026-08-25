@@ -11,6 +11,7 @@ Source of truth lives in this repo on the Mac. Scripts deploy to the Claw at `~/
 | `steam-nonsteam-games` | List, size, and uninstall non-Steam games + orphan compatdata | `~/bin/steam-nonsteam-games list` |
 | `msi-sudo-nopasswd` | Toggle passwordless sudo for CLI/agent work (reversible) | `sudo ~/bin/msi-sudo-nopasswd enable` |
 | `deploy-to-claw` | Push repo scripts to the Claw (run from Mac) | `./scripts/deploy-to-claw.sh` |
+| `deck44-preflight` | Read-only Deck 44 migration inventory | `bash scripts/deck44-preflight.sh` |
 
 ### steam-nonsteam-games
 
@@ -24,6 +25,18 @@ Source of truth lives in this repo on the Mac. Scripts deploy to the Claw at `~/
 ```
 
 Add `--yes` to skip typing the game name (still shows the deletion plan). Add `--force` only if Steam is running and you accept the risk.
+
+## Deck 44 migration
+
+The staged Bazzite Deck 44 migration is documented in [docs/deck44-migration.md](docs/deck44-migration.md). The first Deck 44 boot quarantines the custom hibernate, suspend, WiFi, audio, input, battery, and power-button workarounds while retaining the Gamescope adjustments and ZeroTier identity. `uninstalldecky` is the Decky plugin explicitly rebuilt and verified; `hiberdecky` remains deferred.
+
+The read-only preflight collector can be run from the Mac without installing anything on the Claw:
+
+```bash
+ssh -o BatchMode=yes user@msi-claw-b.local 'bash -s' < scripts/deck44-preflight.sh
+```
+
+The migration requires a person at the Claw for the update reboot, physical power actions, and any local WiFi recovery. Do not remotely invoke the custom hibernate path.
 
 **Stop Steam before uninstall** (Gaming Mode / `bazzite-steam`). The script backs up `shortcuts.vdf` and removes:
 

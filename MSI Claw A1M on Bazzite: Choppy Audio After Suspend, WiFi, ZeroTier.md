@@ -26,6 +26,23 @@ Post-sleep choppy/fast-forward audio on the MSI Claw A1M was mainly a **real-tim
 
 ---
 
+## Deck 44 migration status
+
+The staged migration procedure is in [docs/deck44-migration.md](docs/deck44-migration.md). As of 2026-08-25:
+
+- Bazzite Deck 44 `44.20260824` is active.
+- The currently booted Deck 43 deployment is pinned for rollback.
+- The custom hibernate, suspend, WiFi, input, battery, audio, and power-button paths are quarantined in `/var/home/user/deck44-quarantine-20260825-161333`.
+- The BE200 PCI D3cold guard is the deliberate exception: `/etc/udev/rules.d/99-be200-no-d3cold.rules` is active with `d3cold_allowed=0` for PCI ID `8086:272b`.
+- Gamescope `--disable-layers` and the Gamescope session extension remain in place.
+- Deck 44 launches `ogui-steam`; the effective `ogui-steam` Gamescope override is live-validated after a supervised Gamescope restart, and the running command line contains `--disable-layers`.
+- IDUN now launches manually under the corrected session through Proton Experimental and DXVK on Intel Arc. No xe/DRM or Unity device-loss error appeared, but high CPU contention and OpenGamepadUI's once-per-second orphan-window polling remain plausible causes of the recurring UI freeze.
+- The orphan IDs are reproducibly IDUN/Steam windows on the nested Xwayland display, indicating an OpenGamepadUI window-association bug. System-wide CPU, I/O, and memory pressure are absent, so this remains an unproven game-specific stutter lead rather than a reason to disable the working handheld stack.
+- ZeroTier remains layered, enabled, active, and `ONLINE` on the existing node and network.
+- `uninstalldecky` remains installed; `hiberdecky` is intentionally deferred.
+- Four local s2idle tests have passed with the BE200 guard active: two recovered immediately and two had the first DHCP attempt time out before a retry restored WiFi. No new `iwlwifi` firmware-reset failure appeared.
+- WiFi recovery is therefore **working with occasional slow DHCP recovery**; no extra DHCP/reconnect hook is installed. Hibernation remains deferred.
+
 ## Hardware (short)
 
 - **Audio:** SOF `sof-hda-dsp`, PCI `8086:7e28` — **not** `snd_hda_intel`

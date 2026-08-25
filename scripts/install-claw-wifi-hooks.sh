@@ -30,11 +30,13 @@ WIFI_SCRIPT="$(find_repo_file claw-wifi-post-resume.sh)"
 DISPATCHER="$(find_repo_file 99-claw-wifi-post-resume)"
 SYSCTL_WLAN="$(find_repo_file 99-msi-claw-wlan-rp-filter.conf)"
 UDEV_ZT="$(find_repo_file 99-msi-claw-zt-rp-filter.rules)"
+UDEV_BE200="$(find_repo_file 99-be200-no-d3cold.rules)"
 
 install -m 755 "$WIFI_SCRIPT" /usr/local/bin/claw-wifi-post-resume.sh
 install -m 755 "$DISPATCHER" /etc/NetworkManager/dispatcher.d/99-claw-wifi-post-resume
 install -m 644 "$SYSCTL_WLAN" /etc/sysctl.d/99-msi-claw-wlan-rp-filter.conf
 install -m 644 "$UDEV_ZT" /etc/udev/rules.d/99-msi-claw-zt-rp-filter.rules
+install -m 644 "$UDEV_BE200" /etc/udev/rules.d/99-be200-no-d3cold.rules
 
 sysctl --system >/dev/null 2>&1 || sysctl -p /etc/sysctl.d/99-msi-claw-wlan-rp-filter.conf
 udevadm control --reload-rules
@@ -50,4 +52,5 @@ echo "  /usr/local/bin/claw-wifi-post-resume.sh"
 echo "  /etc/NetworkManager/dispatcher.d/99-claw-wifi-post-resume"
 echo "  /etc/sysctl.d/99-msi-claw-wlan-rp-filter.conf"
 echo "  /etc/udev/rules.d/99-msi-claw-zt-rp-filter.rules"
+echo "  /etc/udev/rules.d/99-be200-no-d3cold.rules"
 echo "Done. Test after next suspend: sudo /usr/local/bin/claw-wifi-post-resume.sh --refresh-only"
