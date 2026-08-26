@@ -1,29 +1,5 @@
 ## MSI Claw customizations inventory
 
-### Deck 44 migration state
-
-This table defines the intended first-boot state for the Deck 44 migration. The detailed entries below are the pre-migration Deck 43 baseline and are retained for rollback and controlled restoration; they do not mean every item should remain active during the first Deck 44 test.
-
-| Area | First Deck 44 state | Reason / follow-up |
-|------|---------------------|-------------------|
-| Bazzite deployment | Stable Deck 44 `44.20260824` active after pinning the current Deck 43 deployment | Fedora major-version and handheld-stack transition; retain a bootable rollback target |
-| Custom hibernate and `hiberdecky` | **Quarantined / deferred** | Deck 44 baseline uses the native stack first; preserve swap, resume kargs, and backups only |
-| Native HHD hibernate (`General -> Hibernate`) | **Documented upstream, not locally validated** | No direct shortcut is documented; inspect the menu only, and defer activation until the Claw-specific multi-device BTRFS path is revalidated |
-| Custom suspend, WiFi, input, battery, audio, and power hooks | **Quarantined** | Avoid competing with InputPlumber, SteamOS-Manager, OpenGamepadUI, and native system services |
-| BE200 PCI D3cold guard (`99-be200-no-d3cold.rules`) | **Retained / restored as a narrow exception** | Upstream has no released fix for the confirmed BE200 firmware reset failure; matches PCI ID `8086:272b` and does not control NetworkManager |
-| Gamescope `--disable-layers` and DPMS-off adjustment | **Retained / live-validated** | Deck 44 uses `ogui-steam`; the effective override is active in the running Gamescope command line |
-| ZeroTier client, node identity, and membership | **Retained** | Verify service and online state without regenerating identity or joining a new network |
-| Decky Loader and existing plugins | **Retained**, except `hiberdecky` | Rebuild and verify `uninstalldecky`; preserve other plugin versions from preflight |
-| UTC RTC setting | **Retained** | Persistent clock policy, not a handheld-stack hook |
-
-The migration procedure and operator gates are in [docs/deck44-migration.md](docs/deck44-migration.md). No device state is changed by this inventory update.
-
-Four supervised post-resume tests are now recorded: BE200 firmware remained stable with `d3cold_allowed=0`; two cycles recovered immediately and two required the first DHCP attempt to time out before a retry restored connectivity. Treat WiFi as **working with occasional slow DHCP recovery**; no additional reconnect hook is justified yet.
-
-IDUN graphics diagnosis on 2026-08-25: the corrected Gamescope session is live, and manual launch under Proton Experimental reaches DXVK on Intel Arc without a GPU or Unity device-loss error. The orphan-window IDs are IDUN/Steam windows on the nested Xwayland display and expose an OpenGamepadUI association defect, but the host has about 82% CPU idle, no I/O or memory pressure, and no confirmed correlation to the five-second UI freeze. The foreground booster can run after importing the current display variables but does not show a confirmed cgroup boost in Gamescope. No further OS or kernel workaround is justified at this point.
-
-## Pre-migration Deck 43 baseline
-
 ### Hibernate (core workaround for Bazzite + BTRFS)
 
 | Item             | Location / detail                                                                                                                                       |

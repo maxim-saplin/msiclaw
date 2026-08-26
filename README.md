@@ -30,6 +30,8 @@ Add `--yes` to skip typing the game name (still shows the deletion plan). Add `-
 
 The staged Bazzite Deck 44 migration is documented in [docs/deck44-migration.md](docs/deck44-migration.md). The first Deck 44 boot quarantines the custom hibernate, suspend, WiFi, audio, input, battery, and power-button workarounds while retaining the Gamescope adjustments and ZeroTier identity. `uninstalldecky` is the Decky plugin explicitly rebuilt and verified; `hiberdecky` remains deferred.
 
+The rolled-back M1/M2 and Moonlight chord investigation is documented in [docs/msi-claw-m1-m2-moonlight.md](docs/msi-claw-m1-m2-moonlight.md).
+
 The read-only preflight collector can be run from the Mac without installing anything on the Claw:
 
 ```bash
