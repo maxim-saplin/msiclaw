@@ -1,5 +1,7 @@
 To connect to device use `ssh user@msi-claw-b.local`
 
+For live-device fixes, treat repository edits and deployment as separate states. Before claiming a fix is fixed, ready, or deployed, identify the actual trigger and file it executes, check whether migration or quarantine leaves it inactive, install the exact live target, compare its hash and permissions with the source, and run a narrow behavior check on the device. Never report a repository-only patch as deployed, and do not add documentation or bookkeeping edits unless they are required by the runtime fix.
+
 `claw-hibernate.sh` exists in two places on-device: the Decky-bundled copy (`~/homebrew/plugins/hiberdecky/scripts/claw-hibernate.sh`) and `/usr/local/bin/claw-hibernate.sh`. Decky's `main.py` always prefers the bundled one when it exists (near-always true) — patching only `/usr/local/bin/` silently never runs. They should be symlinked (see `hiberdecky/scripts/install.sh`); if they aren't, fix that instead of copying. Before telling the user a script change is "deployed" and ready to test, confirm which file the actual trigger (Decky button / systemd unit / cron) executes — e.g. `readlink -f` or `diff` the two — don't assume.
 
 Never trigger `sleep`/`hibernate` on this device remotely without the user's explicit go-ahead first. RTC auto-wake is not confirmed to bring it back from the custom hibernate path, so a remote trigger can leave the device fully off until someone physically presses the power button.
