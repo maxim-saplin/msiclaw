@@ -17,11 +17,11 @@ usage() {
   cat <<'EOF'
 Usage: claw-wifi-post-resume.sh [--refresh-only]
 
-  (default)  Full post-resume recovery: wait for wlan0, verify HTTP, refresh NM
+  (default)  Full post-resume recovery: wait for WiFi, verify HTTP, refresh NM
              connectivity state, then start ZeroTier.
   --refresh-only
-             Light pass: fix ZT rp_filter, force NM connectivity re-check until
-             global + wlan0 report full. No ZeroTier start/stop.
+             Light pass: fix network rp_filter, force NM connectivity re-check
+             until global + WiFi report full. No ZeroTier start/stop.
 EOF
 }
 
@@ -37,8 +37,16 @@ nm_global_connectivity() {
   nmcli networking connectivity 2>/dev/null || echo unknown
 }
 
+wifi_iface() {
+  nmcli -t -f DEVICE,TYPE device 2>/dev/null \
+    | awk -F: '$2 == "wifi" {print $1; exit}'
+}
+
 wlan_ip4_connectivity() {
-  nmcli -g GENERAL.IP4-CONNECTIVITY device show wlan0 2>/dev/null || echo unknown
+  local iface
+  iface=$(wifi_iface)
+  [ -n "$iface" ] || { echo unknown; return 0; }
+  nmcli -g GENERAL.IP4-CONNECTIVITY device show "$iface" 2>/dev/null || echo unknown
 }
 
 wlan_connectivity_is_full() {
@@ -49,7 +57,7 @@ wlan_connectivity_is_full() {
 }
 
 connectivity_snapshot() {
-  printf 'global=%s wlan0_ip4=%s' \
+  printf 'global=%s wifi_ip4=%s' \
     "$(nm_global_connectivity)" "$(wlan_ip4_connectivity)"
 }
 
@@ -59,8 +67,18 @@ force_nm_connectivity_refresh() {
   nmcli networking connectivity check >/dev/null 2>&1 || true
 }
 
-fix_zt_rp_filter() {
+refresh_moonlight_discovery() {
+  command -v avahi-browse >/dev/null 2>&1 || return 0
+  log "refreshing Sunshine mDNS discovery"
+  timeout 5 avahi-browse -rt -l _nvstream._tcp >/dev/null 2>&1 || true
+}
+
+fix_network_rp_filter() {
   local iface
+  iface=$(wifi_iface)
+  if [ -n "$iface" ]; then
+    sysctl -q -w "net.ipv4.conf.${iface}.rp_filter=0" 2>/dev/null || true
+  fi
   for iface in /sys/class/net/zt*; do
     [ -e "$iface" ] || continue
     iface=$(basename "$iface")
@@ -84,13 +102,15 @@ wait_connectivity_full() {
 }
 
 finalize_connectivity() {
-  fix_zt_rp_filter
+  local iface
+  iface=$(wifi_iface)
+  fix_network_rp_filter
   resolvectl flush-caches 2>/dev/null || true
   force_nm_connectivity_refresh
   wait_connectivity_full 30 || true
   # Reapply only once wlan is already full — nudges NM/Plasma to refresh the icon.
-  if wlan_connectivity_is_full; then
-    nmcli device reapply wlan0 2>/dev/null || true
+  if [ -n "$iface" ] && wlan_connectivity_is_full; then
+    nmcli device reapply "$iface" 2>/dev/null || true
     sleep 1
     force_nm_connectivity_refresh
     wait_connectivity_full 10 || true
@@ -112,24 +132,31 @@ wait_nm() {
 }
 
 wait_wlan() {
-  local i state kicked=0 rfkilled=0
+  local i iface state kicked=0 rfkilled=0
   for i in $(seq 1 "$MAX_WAIT"); do
-    state=$(nmcli -t -f DEVICE,STATE device 2>/dev/null | awk -F: '$1=="wlan0"{print $2; exit}')
+    iface=$(wifi_iface)
+    state=""
+    if [ -n "$iface" ]; then
+      state=$(nmcli -t -f DEVICE,STATE device 2>/dev/null \
+        | awk -F: -v iface="$iface" '$1 == iface {print $2; exit}')
+    fi
     [ "$state" = "connected" ] && return 0
-    # Seen post-resume: wlan0 stuck retrying association on its own
+    # Seen post-resume: WiFi stuck retrying association on its own
     # (repeated supplicant-disconnect) for over a minute with nothing to show
     # for it. Give NM's own retry a head start, then force it.
     if [ "$kicked" -eq 0 ] && [ "$i" -ge 15 ]; then
-      log "wlan0 stuck (state=${state:-unknown}) after ${i}s, forcing disconnect/reconnect"
-      nmcli device disconnect wlan0 >/dev/null 2>&1 || true
-      sleep 1
-      nmcli device connect wlan0 >/dev/null 2>&1 || true
+      log "WiFi stuck (iface=${iface:-unknown}, state=${state:-unknown}) after ${i}s, forcing disconnect/reconnect"
+      if [ -n "$iface" ]; then
+        nmcli device disconnect "$iface" >/dev/null 2>&1 || true
+        sleep 1
+        nmcli device connect "$iface" >/dev/null 2>&1 || true
+      fi
       kicked=1
     fi
     # Still stuck well past that — cycle the radio itself (this is what
     # manually toggling WiFi off/on in the UI does).
     if [ "$rfkilled" -eq 0 ] && [ "$i" -ge 40 ]; then
-      log "wlan0 still stuck (state=${state:-unknown}) after ${i}s, cycling wifi radio"
+      log "WiFi still stuck (iface=${iface:-unknown}, state=${state:-unknown}) after ${i}s, cycling WiFi radio"
       rfkill block wifi >/dev/null 2>&1 || true
       sleep 1
       rfkill unblock wifi >/dev/null 2>&1 || true
@@ -148,8 +175,11 @@ verify_internet() {
 }
 
 recover_wlan() {
-  log "recover: nmcli device reapply wlan0 ($(connectivity_snapshot))"
-  nmcli device reapply wlan0 2>/dev/null || true
+  local iface
+  iface=$(wifi_iface)
+  [ -n "$iface" ] || { log "recover: WiFi interface not found"; return 0; }
+  log "recover: nmcli device reapply $iface ($(connectivity_snapshot))"
+  nmcli device reapply "$iface" 2>/dev/null || true
   sleep 3
   resolvectl flush-caches 2>/dev/null || true
   force_nm_connectivity_refresh
@@ -163,15 +193,13 @@ start_zt_if_needed() {
   [ "$want_zt" -eq 1 ] || return 0
 
   if systemctl is-active --quiet zerotier-one.service 2>/dev/null; then
-    fix_zt_rp_filter
+    fix_network_rp_filter
     return 0
   fi
 
-  log "starting zerotier-one after WiFi verified"
+  log "starting zerotier-one after WiFi connected"
   systemctl start zerotier-one.service 2>/dev/null || true
-  sleep 2
-  fix_zt_rp_filter
-  finalize_connectivity
+  fix_network_rp_filter
 }
 
 run_hibernate_post_hooks() {
@@ -188,7 +216,8 @@ run_hibernate_post_hooks() {
 
 refresh_only_main() {
   log "refresh-only start ($(connectivity_snapshot))"
-  fix_zt_rp_filter
+  fix_network_rp_filter
+  refresh_moonlight_discovery
   finalize_connectivity
   log "refresh-only done ($(connectivity_snapshot))"
 }
@@ -209,10 +238,11 @@ main() {
   log "full recovery start ($(connectivity_snapshot))"
 
   wait_nm || { log "NM not running after resume"; start_zt_if_needed; exit 0; }
-  wait_wlan || { log "wlan0 not connected after ${MAX_WAIT}s"; start_zt_if_needed; exit 0; }
+  wait_wlan || { log "WiFi not connected after ${MAX_WAIT}s"; start_zt_if_needed; exit 0; }
 
+  start_zt_if_needed
+  refresh_moonlight_discovery
   resolvectl flush-caches 2>/dev/null || true
-  nmcli networking connectivity wait "$MAX_WAIT" 2>/dev/null || true
 
   local attempt
   for attempt in 1 2 3; do
