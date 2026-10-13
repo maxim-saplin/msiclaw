@@ -14,6 +14,10 @@ Post-sleep choppy/fast-forward audio on the MSI Claw A1M was mainly a **real-tim
 | Controller sluggish ~15s after wake                           | Removed **redundant `systemctl restart hhd`** from sleep hook (rebind only)            | **Fixed**                        |
 | WiFi dead after sleep                                         | BE200 `d3cold_allowed=0` (udev) + sleep hook                                           | **Fixed**                        |
 | WiFi exclamation / "no internet" after wake                   | `rp_filter=0` on wlan0 + `claw-wifi-post-resume.sh`; ZT starts **after** WiFi verified | **Fixed**                        |
+| W12PC (Moonlight) 20–30 s late after wake — ZeroTier is the only route off the home LAN | Claw side can't shorten it: ZeroTier stays silent ~30 s after resume; restarting it costs ~3 min; §9 | **Open** (measured on home LAN only) |
+| Wi-Fi stays disconnected after resume (no NM retry, ~5 min seen 2026-10-12) | `claw-wifi-resume-watchdog.sh` via `systemd-suspend.service.d` drop-in nudges NM at 15 s; §9 | **Working** (normal path verified; stall branch untested) |
+| Power button does nothing after reboot in Big Picture (desktop → Big Picture fixes it) | Boot session `gamescope-session-plus steam` never started `steamos-powerbuttond`; drop-in `gamescope-session-plus@steam.service.d` adds it; §10 | **Fixed** (verify on next reboot) |
+| `ublue-os-media-automount.service` failed on every boot (`systemctl --failed`) | Script also tries root btrfs member `nvme0n1p7`; drop-in `SuccessExitStatus=1`; §11 | **Fixed** (benign failure; see §11 trade-off) |
 | Battery "not charging" on AC (at limit or after Windows boot) | `claw-battery-charge-kick.sh` syncs HHD `p85` → sysfs; `--retry` on wake               | **Fixed**                        |
 | ZeroTier OFFLINE after boot                                   | `zerotier-ensure-online.service`                                                       | **Fixed**                        |
 | Sleep hook on power-button suspend                            | `systemd-suspend.service.d` drop-in                                                    | **Fixed**                        |
@@ -160,7 +164,7 @@ sudo systemctl restart hhd   # only if rebind alone isn't enough
 
 **Fix:** `zerotier-ensure-online.service` + `/usr/local/bin/zerotier-ensure-online.sh` — polls for ONLINE, restarts `zerotier-one` if stuck.
 
-On **resume**, hook stops ZT before sleep; `claw-wifi-post-resume.sh` starts it only after WiFi passes real connectivity checks (not on a fixed 5s timer).
+> **Stale (2026-10-13):** the s2idle hook that stops ZeroTier before sleep is not deployed on the Claw, so `zerotier-one` stays up across suspend. Restarting it after resume costs ~3 min of W12PC connectivity; see §9. (The old text described the hook design, not what runs.)
 
 ---
 
@@ -183,6 +187,8 @@ sudo /usr/local/bin/claw-battery-charge-kick.sh
 ---
 
 ## 6. Sleep hook (power-button suspend)
+
+> **Not deployed (2026-10-13):** `/etc/systemd/system-sleep/` on the Claw has no copy of `50-msi-claw-s2idle-power.sh`, and there is no `msi-claw-s2idle.conf` drop-in. The suspend drop-ins that run are the gamepad one (`99-msi-claw-gamepad-resume.conf`) and the Wi-Fi watchdog (§9). The repo copy's `pre` step stops `zerotier-one`; don't deploy it as-is (§9).
 
 Early on, hooks in `/etc/systemd/system-sleep/` didn't run on button suspend. Fixed:
 
@@ -388,3 +394,93 @@ case "${1:-}" in
 esac
 ```
 ```
+---
+
+## 9. Resume latency: W12PC over ZeroTier (2026-10-13)
+
+**Symptom.** After s2idle resume, Moonlight shows the W12PC 20–30 s late. Moonlight's own log for two user cycles put it online at about +17 s and +33 s after wake.
+
+**Why ZeroTier is the only route.** Moonlight's W12PC entry holds ZeroTier addresses (`<W12PC-ZT-IP>` as local and manual; the public `<home-public-IP>` as remote). Sunshine advertises over mDNS on the ZeroTier interface only. The W12PC's ZeroTier node is `<W12PC-ZT-node>`, which also sits on the LAN at `<W12PC-LAN-IP>`. There SMB (445) is open but Sunshine (47989) is refused. Any ZeroTier delay is therefore a delay for Moonlight. Off the home LAN the Claw sits behind provider NAT, so ZeroTier is the only route there too, via NAT traversal or a relay. That path hasn't been measured.
+
+**Measurements.** `systemctl suspend` with an RTC wake after 45 s (s2idle only). Times are seconds after wake.
+
+| Run | Wi-Fi link up | claw-wifi done | ZeroTier LAN path preferred | Sunshine answers |
+|---|---|---|---|---|
+| Baseline, 09:34 | +1.8 | +11.1 | +8.0 | +32.4 |
+| Baseline, 09:40 | +1.7 | +10.8 | +16.1 | +31.6 |
+| `zerotier-one` restarted after Wi-Fi (rejected) | +1.6 | +15.2 | ONLINE at ~+8 | none for ~3.3 min |
+| Validation, 10:01 (changes below) | +2.5 | +9.6 | +8.1 | +31.6 |
+
+**Findings**
+
+- **Wi-Fi is not the gate.** The link is up within about 2 s of wake and DHCP within about 2.3 s. The `sleep 2` and internet verification in `claw-wifi-post-resume.sh` add about 8 s before "done", but they don't delay ZeroTier.
+- **ZeroTier is the gate.** A capture on the LAN shows the W12PC's packets reaching the Claw from about +2.7 s. The Claw sends nothing back until about +30 s, then fires a burst on all its UDP sockets. Both baselines fit this. No ZeroTier log explains it, so treat the ~30 s as observed behaviour, not a documented timer.
+- **Restarting `zerotier-one` is worse.** After a restart the peer path returns within seconds. But the tap's ARP entry for `<W12PC-ZT-IP>` stays `INCOMPLETE`, and the W12PC doesn't answer for about 3 min (restart 09:45:22, answer 09:48:33). A static `ip neigh` entry for the W12PC's MAC (`<W12PC-ZT-MAC>`) didn't help. Don't restart ZeroTier on resume.
+- **The repo's s2idle hook must not be deployed as-is.** `system/system-sleep/50-msi-claw-s2idle-power.sh` stops `zerotier-one` before suspend. It isn't deployed on the Claw (see §4 and §6), and this is the reason.
+- **LAN ICMP to `<W12PC-LAN-IP>` is inconsistent after resume.** One cycle answered at about +4 s; another gave no answer for about 12 s. Not investigated on the W12PC side.
+- **Stall gap.** `claw-wifi-post-resume.sh` only runs on NM's wlan `up` event. On 2026-10-12 Wi-Fi sat disconnected for about 5 min after the 21:09 resume with no logged reason, and the 19:46 resume needed minutes of recovery too. Nothing retried association, and the script's own stall logic was unreachable. The stable cloned MAC also changed at 21:09 (`<earlier-Claw-Wi-Fi-MAC>` → `<Claw-Wi-Fi-MAC>`).
+
+**Deployed 2026-10-13.** Repo → device via `scripts/install-claw-wifi-hooks.sh`, run from a staged copy. Every target was checked against the repo by hash, mode and owner.
+
+- `claw-wifi-post-resume.sh`: the unconditional `sleep 2` is gone from the normal resume path. It stays in the hibernate branch.
+- `claw-wifi-resume-watchdog.sh` and `systemd-suspend.service.d/99-msi-claw-wifi-resume.conf`: started after every suspend through `ExecStartPost=-systemd-run --no-block`, so it runs in its own unit. At 15 s, if `wlp44s0f0` is disconnected, unavailable or failed, it runs `nmcli device connect`. If still stuck at 40 s it cycles the radio with rfkill. A normal resume logs "nothing to do" (verified). The stall branches are not yet exercised.
+- Reconciled the repo with the device: `99-claw-wifi-post-resume` (interface detection, instead of hard-coded `wlan0`), `99-msi-claw-wlan-rp-filter.conf` (`all`/`default`, instead of `wlan0`), and `zerotier-ensure-online.{sh,service}` (on the device but missing from the repo). The installer now installs these too.
+
+**Not changed:** ZeroTier configuration, the W12PC, the gamepad drop-in, and the hibernate path.
+
+**Open**
+
+- A LAN route (`<W12PC-LAN-IP>`) is not an option. It only works on the home network, and it would need a W12PC firewall change. Off home, the Claw is behind provider NAT, so ZeroTier is the only path. Every measurement here is from the home LAN, where ZeroTier's W12PC path is direct. Measure the off-home path next time the Claw is on the other Wi-Fi.
+- The stored WAN address (`<home-public-IP>:47989`) in Moonlight is a possible second route only if the home router forwards Sunshine's ports. That is unverified; test it from the other network with `curl`.
+- Watch the next Wi-Fi stall: `journalctl -t claw-wifi-watchdog`.
+- The device's `~/src/msiclaw` clone is a stale copy from 2026-07-03 (it still uses `wlan0`). Refresh it with `scripts/deploy-to-claw.sh --mirror` when convenient. It wasn't run as part of this work.
+
+**Diagnostics** (`diagnostics/claw-zt/`). The scripts read the addresses from the environment, so set them first: `W12PC_ZT_IP` (W12PC ZeroTier address), `W12PC_LAN_IP`, `W12PC_NODE` (its ZeroTier node ID) and `CLAW_LAN_IP`. The addresses are not stored in the repo.
+
+- `claw-zt-monitor.sh`: 1 Hz probe of Wi-Fi state, Sunshine HTTP and ICMP over ZeroTier, LAN ICMP and Sunshine port, and ZeroTier state every 5 s. Run as a user unit: `systemd-run --user --unit=claw-zt-monitor /bin/bash ~/claw-zt-monitor.sh`. Logs to `~/claw-zt-monitor.log`.
+- `claw-zt-cycle.sh`: suspend test harness. It writes a marker, arms an RTC wake, and runs `systemctl suspend`. Start it with `sudo systemd-run --unit=claw-test-cycle-$(date +%s) --collect /bin/bash ~/claw-zt-cycle.sh 45`. It never hibernates.
+- `claw-zt-analyze.py`: summarises the last cycle from the journal and the probe log.
+- `claw-lan-cap.sh`: ARP and ZeroTier UDP capture on the LAN, written to `/var/tmp/claw-lan-cap.pcap`.
+
+**Test-rig notes**
+
+- Use s2idle only (`systemctl suspend` with an RTC wake). Don't hibernate for tests.
+- Arming with `rtcwake` overwrote a pre-existing RTC alarm (07:01 UTC). Check `/proc/driver/rtc` before arming.
+- SELinux blocks systemd from executing scripts in `/home/user`, so run them with `/bin/bash`. Root can't write into `/home/user`, so use `/var/tmp` for output.
+
+---
+
+## 10. Power button dead after reboot in Big Picture (2026-10-13)
+
+**Symptom.** After a reboot, the power button does nothing in Big Picture. Switching to desktop and back to Big Picture makes it work.
+
+**How the power button works.** `logind` ignores the power key (`/etc/systemd/logind.conf.d/deck.conf`: `HandlePowerKey=ignore`). The key reaches Steam only through the user service `steamos-powerbuttond`, which sends `steam://shortpowerpress`. Without that daemon, the key does nothing.
+
+**Cause.**
+- SDDM autologin starts `gamescope-session-steam.desktop` (`/etc/sddm.conf.d/zz-holo-autologin.conf`, `Session=`). That runs `gamescope-session-plus steam`, which starts `gamescope-session-plus@steam.service`.
+- `steamos-powerbuttond` is only wanted by `gamescope-session-plus@ogui-steam.service`, through `/usr/lib/systemd/user/gamescope-session-plus@ogui-steam.service.wants/`. The `steam` instance doesn't want it.
+- Desktop → Big Picture starts `gamescope-session-ogui-steam.desktop`, which starts the `ogui-steam` instance and so the daemon. That's why the switch fixes it.
+- Evidence from boot 2026-10-12 17:54: `steamos-powerbuttond` isn't started until 18:04:43, when SDDM starts `gamescope-session-plus ogui-steam`. No power-button forwarding happens before then. Presses after 18:04 are forwarded.
+- The Deck 44 migration runs `ogui-steam`, but the autologin file still points at the older `steam` session.
+
+**Fix (deployed 2026-10-13).** `system/systemd-user/gamescope-session-plus@steam.service.d/10-claw-powerbutton.conf` adds `Wants=steamos-powerbuttond.service` to the `steam` instance. Installed with `scripts/install-claw-powerbutton-session.sh`. The session you boot into doesn't change.
+
+Verified on the device: the hash matches the repo, the mode is 644 root, and `systemctl --user show gamescope-session-plus@steam.service -p Wants` now lists `steamos-powerbuttond.service`. The fix isn't verified across a reboot yet.
+
+**Alternative, not done.** Point the autologin at `gamescope-session-ogui-steam.desktop` through a drop-in in `/etc/sddm.conf.d/` that sorts after `zz-holo-autologin.conf`. That would change the session you boot into, so it's left for a decision.
+
+**Verify on the next reboot.** `journalctl -b 0 | grep "started successfully"` should show `steamos-powerbuttond` starting soon after login. Then press the power button in Big Picture and check for `sending message: steam://shortpowerpress`.
+
+---
+
+## 11. Failed units after boot (2026-10-13)
+
+`systemctl --failed` showed three units. Here is what each one was.
+
+| Unit | Scope | Cause | Status |
+|---|---|---|---|
+| `ublue-os-media-automount.service` | system | Failed on every boot. The script also tries `/dev/nvme0n1p7`, which is a member device of the root btrfs filesystem (label `bazzite`, four devices: p2, p4, p6, p7). `systemd-mount` refuses because the transient unit `run-media-system-bazzite.mount` already exists (p6 is mounted there). | **Fixed** with a drop-in: `SuccessExitStatus=1` (`system/systemd/ublue-os-media-automount.service.d/10-claw-btrfs-member.conf`, installed by `scripts/install-claw-automount-dropin.sh`). After a restart the unit is `active (exited)` and nothing is failed. Trade-off: the drop-in also hides any other exit 1 from this script. The alternative is disabling the unit, which also stops auto-mounting other drives. |
+| `app-steam@autostart.service` | user | Failed on boot 2026-10-12 at 18:04:48. The Plasma desktop session started at 18:04:36 while Steam was already running in the gamescope session (started 18:04:43). The second Steam instance forwarded its launch and timed out. | Benign. It only happens when two sessions overlap, which the desktop-and-back switch does. The boot into the `steam` session doesn't run it. No change. |
+| `app-org.kde.krdpserver.service` | user | Same overlap. KRDP lost its Wayland compositor when gamescope took over (18:04:40 to 18:04:43). | Benign, same as above. No change. |
+
+**Current boot (2026-10-13 10:27):** the boot went straight into the `steam` session. Power-button forwarding started at 10:27:20, and the user manager has no failed units.

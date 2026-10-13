@@ -1,0 +1,13 @@
+[Unit]
+Description=Ensure ZeroTier is ONLINE after boot
+After=network-online.target zerotier-one.service
+Wants=network-online.target
+Requires=zerotier-one.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zerotier-ensure-online.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

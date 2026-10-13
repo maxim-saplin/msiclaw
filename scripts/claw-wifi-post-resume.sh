@@ -228,9 +228,8 @@ main() {
     exit 0
   fi
 
-  sleep 2
-
   if [ -f "$HIBERNATE_FLAG" ]; then
+    sleep 2
     run_hibernate_post_hooks
     exit 0
   fi

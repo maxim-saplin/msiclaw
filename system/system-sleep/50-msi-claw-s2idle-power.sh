@@ -1,4 +1,9 @@
 #!/bin/sh
+# NOT DEPLOYED on the Claw as of 2026-10-13: /etc/systemd/system-sleep has no copy of
+# this hook and there is no msi-claw-s2idle drop-in. Its "pre" step stops zerotier-one
+# before suspend and "post" relies on claw-wifi-post-resume.sh to start it again.
+# Restarting zerotier-one after resume leaves the W12PC unreachable for ~3 minutes,
+# so do not deploy this as-is. See "9. Resume latency" in the ZeroTier doc.
 STATE=/run/msi-claw-s2idle.state
 GOODIX_USB=3-4
 MSI_USB=3-9
